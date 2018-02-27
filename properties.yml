@@ -1,4 +1,3 @@
-AWS_REGION: us-east-1
 AWS_EMAIL_REGION: us-east-1
 EMAIL_TO_ADMIN: clyde.fondop@adesa.com
 EMAIL_FROM: nw-devops@adesa.com

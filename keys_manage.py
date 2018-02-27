@@ -13,10 +13,10 @@ import os
 # EMAIL_FROM = 'nw-devops@adesa.com'
 # EMAIL_SEND_COMPLETION_REPORT = True
 # GROUP_LIST = "kops"
-#
+
 BUILD_VERSION = '0.0.2'
-AWS_REGION = os.environ['AWS_REGION']
-AWS_EMAIL_REGION = os.environ['AWS_REGION']
+AWS_REGION = os.environ['AWS_EMAIL_REGION']
+AWS_EMAIL_REGION = os.environ['AWS_EMAIL_REGION']
 SERVICE_ACCOUNT_NAME = ['']
 EMAIL_TO_ADMIN = os.environ["EMAIL_TO_ADMIN"]
 EMAIL_FROM = os.environ["EMAIL_FROM"]
