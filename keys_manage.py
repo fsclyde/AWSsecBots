@@ -13,29 +13,33 @@ import os
 # EMAIL_FROM = 'nw-devops@adesa.com'
 # EMAIL_SEND_COMPLETION_REPORT = True
 # GROUP_LIST = "kops"
+#
 
+# Static variables
 BUILD_VERSION = '0.0.2'
-AWS_REGION = os.environ['AWS_EMAIL_REGION']
-AWS_EMAIL_REGION = os.environ['AWS_EMAIL_REGION']
 SERVICE_ACCOUNT_NAME = ['']
+GROUP_LIST = ["kops","admin_full_mfa","nw-classic-users"]
+
+# Environ
+AWS_REGION = 'us-east-1'
+AWS_EMAIL_REGION = 'us-east-1'
 EMAIL_TO_ADMIN = os.environ["EMAIL_TO_ADMIN"]
 EMAIL_FROM = os.environ["EMAIL_FROM"]
 EMAIL_SEND_COMPLETION_REPORT = os.environ["EMAIL_SEND_COMPLETION_REPORT"]
-GROUP_LIST = ["kops","admin_full_mfa","nw-classic-users"]
 
 # Length of mask over the IAM Access Key
 MASK_ACCESS_KEY_LENGTH = 16
 
 # First email warning
 FIRST_WARNING_NUM_DAYS = 76
-FIRST_WARNING_MESSAGE = '14 days left before auto rotation of your key'
+FIRST_WARNING_MESSAGE = 'You have 14 days left before your AWS Access keys get disabled.'
 # Last email warning
 LAST_WARNING_NUM_DAYS = 83
-LAST_WARNING_MESSAGE = '7 days left before auto rotation of your key'
+LAST_WARNING_MESSAGE = 'You have 7 days left before your AWS Access keys get disabled.'
 
 # Max AGE days of key after which it is considered EXPIRED (deactivated)
 KEY_MAX_AGE_IN_DAYS = 90
-KEY_EXPIRED_MESSAGE = 'Your AWS Access has been disable. Go to AWS and create a New Access Keys.'
+KEY_EXPIRED_MESSAGE = 'Your AWS Access has been disabled.'
 KEY_YOUNG_MESSAGE = ''
 
 # ==========================================================
@@ -52,6 +56,21 @@ if MASK_ACCESS_KEY_LENGTH > ACCESS_KEY_LENGTH:
     MASK_ACCESS_KEY_LENGTH = 16
 
 # ==========================================================
+
+HEADER = '''<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
+           "http://www.w3.org/TR/html4/strict.dtd">
+        <HTML>
+           <HEAD>
+           </HEAD>
+           <BODY>
+              <p>Hello<p>
+           </BODY>
+        </HTML>'''
+FOOTER = "<p>Defcon4</p></BODY></HTML>"
+
+# ==========================================================
+
+
 def tzutc():
     return dateutil.tz.tzutc()
 
@@ -59,8 +78,6 @@ def tzutc():
 def key_age(key_created_date):
     tz_info = key_created_date.tzinfo
     age = datetime.now(tz_info) - key_created_date
-
-    print 'key age %s' % age
 
     key_age_str = str(age)
     if 'days' not in key_age_str:
@@ -70,7 +87,7 @@ def key_age(key_created_date):
 
     return days
 
-
+# Send keys desactivation email
 def send_deactivate_email(email_to, username, age, access_key_id):
     client = boto3.client('ses', region_name=AWS_EMAIL_REGION)
     response = client.send_email(
@@ -88,9 +105,11 @@ def send_deactivate_email(email_to, username, age, access_key_id):
                 }
             }
         })
+    print(json.dumps({"username":username,"email_to":email_to,"access_key_id":access_key_id,"key_age":age,"subject":"deactivated"}))
 
 
-def send_completion_email(email_to, finished, deactivated_report):
+# Send summary email to the Admins
+def send_completion_email(email_to, finished, report):
     client = boto3.client('ses', region_name=AWS_EMAIL_REGION)
     response = client.send_email(
         Source=EMAIL_FROM,
@@ -99,26 +118,70 @@ def send_completion_email(email_to, finished, deactivated_report):
         },
         Message={
             'Subject': {
-                'Data': 'AWS IAM Access Key Rotation - Lambda Function'
+                'Data': 'AWS IAM Access Key Rotation - Report'
             },
             'Body': {
                 'Html': {
-                'Data': 'AWS IAM Access Key Rotation Lambda Function (cron job) finished successfully at %s\n\nDeactivation Report:\n%s' % (finished, deactivated_report)
+                'Data': '{} </p>AWS IAM Access Key Rotation Lambda Function (cron job) finished successfully at {}\nDeactivation Report:</p> {} {}'.format(HEADER, finished, report, FOOTER)
                 }
             }
         })
 
-    print(response)
 
+# Send warning message to a specific user
+def send_warning_email(message, username, age, access_key_id):
+    email_to = ['{}@adesa.com'.format(username),'{}@openlane.com'.format(username)]
+    client = boto3.client('ses', region_name=AWS_EMAIL_REGION)
+    response = client.send_email(
+        Source=EMAIL_FROM,
+        Destination={
+            'ToAddresses': ['clyde.fondop@adesa.com']
+        },
+        Message={
+            'Subject': {
+                'Data': 'AWS IAM Access Key Rotation - Warning'
+            },
+            'Body': {
+                'Html': {
+                'Data': '{} {}'
+                        '<p> Access Keys age: {} </p>'
+                        '<p>Access key ID: {} </p>'
+                        '<p>AWS username: {} </p>'
+                        '<p>Command to generate a New AWS Secret Key: <b> aws iam create-access-key --user-name {}</b> </p>{}'.format(HEADER,message,age,access_key_id,username,username,FOOTER)
+                }
+            }
+        })
+
+    print(json.dumps({"message":message,"email_to":email_to,"access_key_id":access_key_id,"key_age":age,"subject":"warning"}))
+
+def formatReport(report_input):
+    report_html = "<tr>"
+
+
+    for users in report_input["users"]:
+
+        for keys in users["keys"]:
+            report_html = report_html + "<td>" + \
+                          users["username"] + "</td>" + \
+                          `keys["age"]` + "</td>" + \
+                          `keys["changed"]` + "</td>" + \
+                          keys["state"] + "</td>" + \
+                          `keys["accesskeyid"]` + "</td>" + "</tr>"
+
+    final_report = "<table>{}</table>".format(report_html)
+
+    # print(final_report)
+
+    return final_report
 
 def mask_access_key(access_key):
     return access_key[-(ACCESS_KEY_LENGTH-MASK_ACCESS_KEY_LENGTH):].rjust(len(access_key), "*")
 
 
 def lambda_handler(event, context):
-    print '*****************************'
-    print 'RotateAccessKey (%s): starting...' % BUILD_VERSION
-    print '*****************************'
+    # print '*****************************'
+    # print 'RotateAccessKey (%s): starting...' % BUILD_VERSION
+    # print '*****************************'
     # Connect to AWS APIs
     client = boto3.client('iam')
 
@@ -136,7 +199,6 @@ def lambda_handler(event, context):
     userindex = 0
 
     for user in data['Users']:
-        # print(user)
         userid = user['UserId']
         username = user['UserName']
         users[userid] = username
@@ -148,11 +210,7 @@ def lambda_handler(event, context):
         userindex += 1
         user_keys = []
 
-        print '---------------------'
-        # print 'userindex %s' % userindex
-        # print 'user %s' % user
         username = users[user]
-        print 'username %s' % username
 
         # test is a user belongs to a specific list of groups. If they do, do not invalidate the access key
         # print "Test if the user belongs to the exclusion group"
@@ -175,23 +233,14 @@ def lambda_handler(event, context):
 
         access_keys = client.list_access_keys(UserName=username)['AccessKeyMetadata']
         for access_key in access_keys:
-            # print access_key
             access_key_id = access_key['AccessKeyId']
-
             masked_access_key_id = mask_access_key(access_key_id)
-
-            # print 'AccessKeyId %s' % masked_access_key_id
-
             existing_key_status = access_key['Status']
-            # print existing_key_status
-
             key_created_date = access_key['CreateDate']
-            # print 'key_created_date %s' % key_created_date
-
             age = key_age(key_created_date)
-            print 'age %s' % age
 
             key_state = ''
+            key_warning = False
             key_state_changed = False
 
             # we only need to examine the currently Active and about to expire keys
@@ -201,43 +250,43 @@ def lambda_handler(event, context):
                 user_keys.append(key_info)
 
             else:
-                if age < FIRST_WARNING_NUM_DAYS:
-                    key_state = KEY_YOUNG_MESSAGE
-                elif age == FIRST_WARNING_NUM_DAYS:
+                if age == FIRST_WARNING_NUM_DAYS:
                     key_state = FIRST_WARNING_MESSAGE
-                elif age == LAST_WARNING_NUM_DAYS:
+                    key_warning = True
+                elif age == 325:
                     key_state = LAST_WARNING_MESSAGE
-                elif age >= KEY_MAX_AGE_IN_DAYS:
+                    key_warning = True
+
+                # Send an email to the users for warning message
+                # if key_warning == True:
+                send_warning_email(key_state,username,age,access_key_id)
+
+                if age >= KEY_MAX_AGE_IN_DAYS:
                     key_state = KEY_EXPIRED_MESSAGE
                     client.update_access_key(UserName=username, AccessKeyId=access_key_id, Status=KEY_STATE_INACTIVE)
                     send_deactivate_email(EMAIL_TO_ADMIN, username, age, masked_access_key_id)
                     key_state_changed = True
 
-            print 'key_state %s' % key_state
 
             key_info = {'accesskeyid': masked_access_key_id, 'age': age, 'state': key_state, 'changed': key_state_changed}
             user_keys.append(key_info)
 
         user_info_with_username = {'userid': userindex, 'username': username, 'keys': user_keys}
-        user_info_without_username = {'userid': userindex, 'keys': user_keys}
-
         users_report1.append(user_info_with_username)
-        users_report2.append(user_info_without_username)
 
     finished = str(datetime.now())
-    deactivated_report1 = {'reportdate': finished, 'users': users_report1}
-    # print 'deactivated_report1 %s ' % deactivated_report1
+    deactivated_report = {'reportdate': finished, 'users': users_report1}
 
-    if EMAIL_SEND_COMPLETION_REPORT:
     # Sending report
-        deactivated_report2 = {'reportdate': finished, 'users': users_report2}
-        send_completion_email(EMAIL_TO_ADMIN, finished, deactivated_report2)
+    if EMAIL_SEND_COMPLETION_REPORT:
+        # Format report to HTML table
+        final_report = formatReport(deactivated_report)
 
-    print '*****************************'
-    print 'Completed (%s): %s' % (BUILD_VERSION, finished)
-    print '*****************************'
+        send_completion_email(EMAIL_TO_ADMIN, finished, final_report)
 
-    return deactivated_report1
+    print(json.dumps(deactivated_report))
+
+    return deactivated_report
 
 if __name__ == "__main__":
    event = context = {}
