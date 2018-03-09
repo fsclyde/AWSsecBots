@@ -52,8 +52,11 @@ functions:
       EMAIL_TO_ADMIN: ${file(properties.yml):EMAIL_TO_ADMIN}
       EMAIL_FROM: ${file(properties.yml):EMAIL_FROM}
       EMAIL_SEND_COMPLETION_REPORT: ${file(properties.yml):EMAIL_SEND_COMPLETION_REPORT}
+      TOKEN: ${file(properties.yml):TOKEN}
+
     tags:
       OWNER: "Defcon"
       ENVIRONMENT: "Build"
       DESCRIPTION: "Security bots"
       PLATFORM: "AWS Lambda"
+    awsKmsKeyArn: arn:aws:kms:us-east-1:854045450972:key/${file(properties.yml):kms_key_id}

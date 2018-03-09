@@ -3,17 +3,20 @@ from datetime import datetime
 import dateutil.tz
 import json
 import ast
-import os
+import os, sys
+import botocore
+from boto.s3.key import Key
+import datetime, requests
+from datetime import timedelta
+from base64 import b64decode
 
-# BUILD_VERSION = '0.0.2'
-# AWS_REGION = 'us-east-1'
-# AWS_EMAIL_REGION = "us-east-1"
-# SERVICE_ACCOUNT_NAME = '@@serviceaccount'
-# EMAIL_TO_ADMIN = "clyde.fondop@adesa.com"
-# EMAIL_FROM = 'nw-devops@adesa.com'
-# EMAIL_SEND_COMPLETION_REPORT = True
-# GROUP_LIST = "kops"
-#
+# AWS Variables
+s3r = boto3.resource('s3')
+s3 = boto3.client('s3')
+kms = boto3.client('kms')
+
+BUCKET_NAME = "newwave-sox-kwjer3209"
+mybucket = s3r.Bucket(BUCKET_NAME)
 
 # Static variables
 BUILD_VERSION = '0.0.2'
@@ -26,16 +29,17 @@ AWS_EMAIL_REGION = 'us-east-1'
 EMAIL_TO_ADMIN = os.environ["EMAIL_TO_ADMIN"]
 EMAIL_FROM = os.environ["EMAIL_FROM"]
 EMAIL_SEND_COMPLETION_REPORT = os.environ["EMAIL_SEND_COMPLETION_REPORT"]
+TOKEN = kms.decrypt(CiphertextBlob=b64decode(os.environ["TOKEN"]))['Plaintext'] # Loggly token
 
 # Length of mask over the IAM Access Key
 MASK_ACCESS_KEY_LENGTH = 16
 
 # First email warning
 FIRST_WARNING_NUM_DAYS = 76
-FIRST_WARNING_MESSAGE = 'You have 14 days left before your AWS Access keys get disabled.'
+FIRST_WARNING_MESSAGE = 'You have 14 days left before your AWS Access key gets disabled.'
 # Last email warning
 LAST_WARNING_NUM_DAYS = 83
-LAST_WARNING_MESSAGE = 'You have 7 days left before your AWS Access keys get disabled.'
+LAST_WARNING_MESSAGE = 'You have 7 days left before your AWS Access key gets disabled.'
 
 # Max AGE days of key after which it is considered EXPIRED (deactivated)
 KEY_MAX_AGE_IN_DAYS = 90
@@ -63,9 +67,7 @@ HEADER = '''<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
            <HEAD>
            </HEAD>
            <BODY>
-              <p>Hello<p>
-           </BODY>
-        </HTML>'''
+              <p>Hello<p>'''
 FOOTER = "<p>Defcon4</p></BODY></HTML>"
 
 # ==========================================================
@@ -77,7 +79,7 @@ def tzutc():
 
 def key_age(key_created_date):
     tz_info = key_created_date.tzinfo
-    age = datetime.now(tz_info) - key_created_date
+    age = datetime.datetime.now(tz_info) - key_created_date
 
     key_age_str = str(age)
     if 'days' not in key_age_str:
@@ -86,6 +88,11 @@ def key_age(key_created_date):
     days = int(key_age_str.split(',')[0].split(' ')[0])
 
     return days
+
+# Function upload for the new file to s3 bucket
+def putObject(data, key_name):
+    Object  = s3r.Object(BUCKET_NAME,key_name)
+    Object.put(Body=json.dumps(data), ContentType='application/json', ACL='authenticated-read')
 
 # Send keys desactivation email
 def send_deactivate_email(email_to, username, age, access_key_id):
@@ -122,7 +129,7 @@ def send_completion_email(email_to, finished, report):
             },
             'Body': {
                 'Html': {
-                'Data': '{} </p>AWS IAM Access Key Rotation Lambda Function (cron job) finished successfully at {}\nDeactivation Report:</p> {} {}'.format(HEADER, finished, report, FOOTER)
+                'Data': '{} </p>AWS IAM Access Key Rotation finished successfully at {}\nDeactivation Report:</p> {} {}'.format(HEADER, finished, report, FOOTER)
                 }
             }
         })
@@ -135,7 +142,7 @@ def send_warning_email(message, username, age, access_key_id):
     response = client.send_email(
         Source=EMAIL_FROM,
         Destination={
-            'ToAddresses': ['clyde.fondop@adesa.com']
+            'ToAddresses': email_to
         },
         Message={
             'Subject': {
@@ -147,7 +154,8 @@ def send_warning_email(message, username, age, access_key_id):
                         '<p> Access Keys age: {} </p>'
                         '<p>Access key ID: {} </p>'
                         '<p>AWS username: {} </p>'
-                        '<p>Command to generate a New AWS Secret Key: <b> aws iam create-access-key --user-name {}</b> </p>{}'.format(HEADER,message,age,access_key_id,username,username,FOOTER)
+                        '<p>Command to generate a New AWS Secret Key: <b> aws iam create-access-key --user-name {}</b> </p>'
+                        '<p>Command to delete the expired AWS Access key: <b>aws iam delete-access-key --access-key {} --user-name {} </b></p>{}'.format(HEADER,message,age,access_key_id,username,username,access_key_id,username,FOOTER)
                 }
             }
         })
@@ -159,23 +167,29 @@ def formatReport(report_input):
 
 
     for users in report_input["users"]:
-
         for keys in users["keys"]:
-            report_html = report_html + "<td>" + \
-                          users["username"] + "</td>" + \
-                          `keys["age"]` + "</td>" + \
-                          `keys["changed"]` + "</td>" + \
-                          keys["state"] + "</td>" + \
-                          `keys["accesskeyid"]` + "</td>" + "</tr>"
+            report_html = report_html  \
+                          + " <td> " + users["username"] + " </td> "\
+                          + " <td> " + `keys["age"]` + " </td> "\
+                          + " <td> " + `keys["changed"]` + " </td> "\
+                          + " <td> " + keys["state"] + " </td> "\
+                          + " <td> " + keys["accesskeyid"] + " </td> " + "</tr>"
+
 
     final_report = "<table>{}</table>".format(report_html)
 
-    # print(final_report)
 
     return final_report
 
 def mask_access_key(access_key):
     return access_key[-(ACCESS_KEY_LENGTH-MASK_ACCESS_KEY_LENGTH):].rjust(len(access_key), "*")
+
+
+# Post event to loggly
+def postToLoggly(data):
+    metric_name = "metrics-sec"
+    headers = {'Content-type': 'application/json'}
+    r = requests.post("https://logs-01.loggly.com/inputs/{}/tag/metrics-sec/".format(TOKEN,metric_name),data=json.dumps(data),headers=headers)
 
 
 def lambda_handler(event, context):
@@ -187,14 +201,6 @@ def lambda_handler(event, context):
 
     users = {}
     data = client.list_users()
-    # print data
-    data = {'Users' :[{'Arn': 'arn:aws:iam::854045450972:user/John.Lee',
-               'CreateDate': datetime(2017, 4, 10, 15, 46, 57, tzinfo=tzutc()),
-               'PasswordLastUsed': datetime(2017, 10, 13, 19, 42, 51, tzinfo=tzutc()),
-               'Path': '/',
-               'UserId': 'AIDAJCF3GFSZOJF53H6DG',
-               'UserName': 'John.Lee'
-            }]}
 
     userindex = 0
 
@@ -218,21 +224,22 @@ def lambda_handler(event, context):
         skip = False
         for groupName in user_groups['Groups']:
             if groupName['GroupName'] in GROUP_LIST:
-                print 'Detected that user belongs to ', GROUP_LIST
+                # print 'Detected that user belongs to ', GROUP_LIST
                 skip = True
                 continue
 
         if skip:
-            print "Do invalidate Access Key"
+            # print "Do invalidate Access Key"
             continue
 
         # check to see if the current user is a special service account
         if username in SERVICE_ACCOUNT_NAME:
-            print 'detected special service account %s, skipping account...', username
+            # print 'detected special service account %s, skipping account...', username
             continue
 
         access_keys = client.list_access_keys(UserName=username)['AccessKeyMetadata']
         for access_key in access_keys:
+
             access_key_id = access_key['AccessKeyId']
             masked_access_key_id = mask_access_key(access_key_id)
             existing_key_status = access_key['Status']
@@ -247,7 +254,6 @@ def lambda_handler(event, context):
             if existing_key_status == "Inactive":
                 key_state = 'key is already in an INACTIVE state'
                 key_info = {'accesskeyid': masked_access_key_id, 'age': age, 'state': key_state, 'changed': False}
-                user_keys.append(key_info)
 
             else:
                 if age == FIRST_WARNING_NUM_DAYS:
@@ -259,13 +265,14 @@ def lambda_handler(event, context):
 
                 # Send an email to the users for warning message
                 # if key_warning == True:
-                send_warning_email(key_state,username,age,access_key_id)
+                # send_warning_email(LAST_WARNING_MESSAGE,username,age,access_key_id)
 
                 if age >= KEY_MAX_AGE_IN_DAYS:
                     key_state = KEY_EXPIRED_MESSAGE
-                    client.update_access_key(UserName=username, AccessKeyId=access_key_id, Status=KEY_STATE_INACTIVE)
-                    send_deactivate_email(EMAIL_TO_ADMIN, username, age, masked_access_key_id)
+                    # client.update_access_key(UserName=username, AccessKeyId=access_key_id, Status=KEY_STATE_INACTIVE)
+                    # send_deactivate_email(EMAIL_TO_ADMIN, username, age, masked_access_key_id)
                     key_state_changed = True
+                    key_state = 'warning message sent to the specified user'
 
 
             key_info = {'accesskeyid': masked_access_key_id, 'age': age, 'state': key_state, 'changed': key_state_changed}
@@ -274,17 +281,19 @@ def lambda_handler(event, context):
         user_info_with_username = {'userid': userindex, 'username': username, 'keys': user_keys}
         users_report1.append(user_info_with_username)
 
-    finished = str(datetime.now())
+    finished = str(datetime.datetime.now())
     deactivated_report = {'reportdate': finished, 'users': users_report1}
 
     # Sending report
     if EMAIL_SEND_COMPLETION_REPORT:
         # Format report to HTML table
         final_report = formatReport(deactivated_report)
-
         send_completion_email(EMAIL_TO_ADMIN, finished, final_report)
 
-    print(json.dumps(deactivated_report))
+    # print(json.dumps(deactivated_report))
+    data = deactivated_report
+    # post log to loggly
+    postToLoggly(data)
 
     return deactivated_report
 
