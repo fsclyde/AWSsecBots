@@ -189,7 +189,10 @@ def mask_access_key(access_key):
 def postToLoggly(data):
     metric_name = "metrics-sec"
     headers = {'Content-type': 'application/json'}
+    print(TOKEN)
+    sys.exit(0)
     r = requests.post("https://logs-01.loggly.com/inputs/{}/tag/metrics-sec/".format(TOKEN,metric_name),data=json.dumps(data),headers=headers)
+
 
 
 def lambda_handler(event, context):
@@ -278,8 +281,13 @@ def lambda_handler(event, context):
             key_info = {'accesskeyid': masked_access_key_id, 'age': age, 'state': key_state, 'changed': key_state_changed}
             user_keys.append(key_info)
 
+
         user_info_with_username = {'userid': userindex, 'username': username, 'keys': user_keys}
         users_report1.append(user_info_with_username)
+
+        # post log to loggly
+        # print(user_info_with_username)
+        postToLoggly(user_info_with_username)
 
     finished = str(datetime.datetime.now())
     deactivated_report = {'reportdate': finished, 'users': users_report1}
@@ -288,12 +296,7 @@ def lambda_handler(event, context):
     if EMAIL_SEND_COMPLETION_REPORT:
         # Format report to HTML table
         final_report = formatReport(deactivated_report)
-        send_completion_email(EMAIL_TO_ADMIN, finished, final_report)
-
-    # print(json.dumps(deactivated_report))
-    data = deactivated_report
-    # post log to loggly
-    postToLoggly(data)
+        # send_completion_email(EMAIL_TO_ADMIN, finished, final_report)
 
     return deactivated_report
 
