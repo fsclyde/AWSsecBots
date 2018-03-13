@@ -36,14 +36,14 @@ MASK_ACCESS_KEY_LENGTH = 16
 
 # First email warning
 FIRST_WARNING_NUM_DAYS = 76
-FIRST_WARNING_MESSAGE = 'You have 14 days left before your AWS Access key gets disabled.'
+FIRST_WARNING_MESSAGE = 'You have 14 days left before your AWS Access key gets disabled'
 # Last email warning
 LAST_WARNING_NUM_DAYS = 83
-LAST_WARNING_MESSAGE = 'You have 7 days left before your AWS Access key gets disabled.'
+LAST_WARNING_MESSAGE = 'You have 7 days left before your AWS Access key gets disabled'
 
 # Max AGE days of key after which it is considered EXPIRED (deactivated)
 KEY_MAX_AGE_IN_DAYS = 90
-KEY_EXPIRED_MESSAGE = 'Your AWS Access has been disabled.'
+KEY_EXPIRED_MESSAGE = 'Your AWS Access has been disabled'
 KEY_YOUNG_MESSAGE = ''
 
 # ==========================================================
@@ -95,7 +95,8 @@ def putObject(data, key_name):
     Object.put(Body=json.dumps(data), ContentType='application/json', ACL='authenticated-read')
 
 # Send keys desactivation email
-def send_deactivate_email(email_to, username, age, access_key_id):
+def send_deactivate_email(username, age, access_key_id):
+    email_to = ['{}@adesa.com'.format(username),'{}@openlane.com'.format(username)]
     client = boto3.client('ses', region_name=AWS_EMAIL_REGION)
     response = client.send_email(
         Source=EMAIL_FROM,
@@ -172,7 +173,7 @@ def formatReport(report_input):
                           + " <td> " + users["username"] + " </td> "\
                           + " <td> " + `keys["age"]` + " </td> "\
                           + " <td> " + `keys["changed"]` + " </td> "\
-                          + " <td> " + keys["state"] + " </td> "\
+                          + " <td> " + keys["message"] + " </td> "\
                           + " <td> " + keys["accesskeyid"] + " </td> " + "</tr>"
 
 
@@ -189,10 +190,15 @@ def mask_access_key(access_key):
 def postToLoggly(data):
     metric_name = "metrics-sec"
     headers = {'Content-type': 'application/json'}
-    print(TOKEN)
-    sys.exit(0)
     r = requests.post("https://logs-01.loggly.com/inputs/{}/tag/metrics-sec/".format(TOKEN,metric_name),data=json.dumps(data),headers=headers)
 
+
+# Format logging
+# def formatLogging(input):
+#     formated = ""
+#     for row in input:
+#         formated = '{}="{}" {}'.format(row, input[row], formated)
+#     return formated
 
 
 def lambda_handler(event, context):
@@ -249,45 +255,48 @@ def lambda_handler(event, context):
             key_created_date = access_key['CreateDate']
             age = key_age(key_created_date)
 
-            key_state = ''
+            key_state = 'active_ok'
+            key_message = 'No action required'
             key_warning = False
             key_state_changed = False
 
             # we only need to examine the currently Active and about to expire keys
             if existing_key_status == "Inactive":
-                key_state = 'key is already in an INACTIVE state'
+                key_state = "inactive"
+                key_message = 'key is already in an INACTIVE state'
                 key_info = {'accesskeyid': masked_access_key_id, 'age': age, 'state': key_state, 'changed': False}
 
             else:
-                if age == FIRST_WARNING_NUM_DAYS:
-                    key_state = FIRST_WARNING_MESSAGE
+                if age == send_warning_email:
+                    key_state = "active_warning"
+                    key_message = FIRST_WARNING_MESSAGE
                     key_warning = True
-                elif age == 325:
-                    key_state = LAST_WARNING_MESSAGE
+                elif age == LAST_WARNING_NUM_DAYS:
+                    key_state = "active_warning"
+                    key_message = LAST_WARNING_MESSAGE
                     key_warning = True
 
-                # Send an email to the users for warning message
-                # if key_warning == True:
-                # send_warning_email(LAST_WARNING_MESSAGE,username,age,access_key_id)
+                # Send an email to the users
+                if key_warning == True:
+                    send_warning_email(key_message,username,age,access_key_id)
 
+                # Send Email to the Admins
                 if age >= KEY_MAX_AGE_IN_DAYS:
-                    key_state = KEY_EXPIRED_MESSAGE
-                    # client.update_access_key(UserName=username, AccessKeyId=access_key_id, Status=KEY_STATE_INACTIVE)
-                    # send_deactivate_email(EMAIL_TO_ADMIN, username, age, masked_access_key_id)
+                    key_state = 'active_expired'
+                    client.update_access_key(UserName=username, AccessKeyId=access_key_id, Status=KEY_STATE_INACTIVE)
+                    send_deactivate_email(username, age, masked_access_key_id)
                     key_state_changed = True
-                    key_state = 'warning message sent to the specified user'
+                    key_message = 'AWS Access desactivated for the user'
 
 
-            key_info = {'accesskeyid': masked_access_key_id, 'age': age, 'state': key_state, 'changed': key_state_changed}
+            key_info = {'accesskeyid': masked_access_key_id, 'age': age, 'message': key_message, 'changed': key_state_changed, 'key_state': key_state}
             user_keys.append(key_info)
-
+            key_complete_info = {"user_info":{'username':username, 'userid':userindex, 'accesskeyid': masked_access_key_id, 'age': age, 'message': key_message, 'changed': key_state_changed, 'key_state': key_state}}
+            postToLoggly(key_complete_info)
 
         user_info_with_username = {'userid': userindex, 'username': username, 'keys': user_keys}
         users_report1.append(user_info_with_username)
 
-        # post log to loggly
-        # print(user_info_with_username)
-        postToLoggly(user_info_with_username)
 
     finished = str(datetime.datetime.now())
     deactivated_report = {'reportdate': finished, 'users': users_report1}
@@ -296,7 +305,7 @@ def lambda_handler(event, context):
     if EMAIL_SEND_COMPLETION_REPORT:
         # Format report to HTML table
         final_report = formatReport(deactivated_report)
-        # send_completion_email(EMAIL_TO_ADMIN, finished, final_report)
+        send_completion_email(EMAIL_TO_ADMIN, finished, final_report)
 
     return deactivated_report
 
