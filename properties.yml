@@ -1,5 +1,5 @@
 AWS_EMAIL_REGION: us-east-1
-EMAIL_TO_ADMIN: clyde.fondop@adesa.com
+EMAIL_TO_ADMIN: nw-devops@adesa.com
 EMAIL_FROM: nw-devops@adesa.com
 EMAIL_SEND_COMPLETION_REPORT: True
 kms_key_id: 0847e5bf-2548-4375-8521-ff20d55df813

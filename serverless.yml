@@ -60,3 +60,7 @@ functions:
       DESCRIPTION: "Security bots"
       PLATFORM: "AWS Lambda"
     awsKmsKeyArn: arn:aws:kms:us-east-1:854045450972:key/${file(properties.yml):kms_key_id}
+    events:
+      # Invoke Lambda function every days at 7am
+      # schedule: https://docs.aws.amazon.com/AmazonCloudWatch/latest/events/ScheduledEvents.html
+      - schedule: cron(0 7 * * ? *)
