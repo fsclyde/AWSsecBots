@@ -101,7 +101,7 @@ def send_deactivate_email(username, age, access_key_id):
     response = client.send_email(
         Source=EMAIL_FROM,
         Destination={
-            'ToAddresses': [email_to]
+            'ToAddresses': email_to
         },
         Message={
             'Subject': {
